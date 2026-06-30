@@ -1,0 +1,30 @@
+project:
+  type: website
+  output-dir: docs
+  render:
+    - index.qmd
+    - qmd/aim2_variables.qmd
+
+website:
+  title: "Aim 2 — Melanoma · ICI · AIN"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Overview
+      - href: qmd/aim2_variables.qmd
+        text: Variable Creation
+
+format:
+  html:
+    theme:
+      - lumen
+      - custom.scss
+    toc: true
+    toc-depth: 4
+    code-fold: true
+
+execute:
+  eval: false
+  warning: false
+  message: false
+  error: true

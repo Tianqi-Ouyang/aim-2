@@ -1,0 +1,352 @@
+---
+title: "Aim 2 — Variable Creation"
+author: "Tianqi Ouyang"
+date: "2026-06-30"
+---
+
+# 0 Purpose
+
+This file builds every **analysis variable specified in the Aim 2 Statistical
+Analysis Plan** (`Tianqi_SAP.docx`) from the longitudinal REDCap export and the
+RPDR laboratory pull. It produces one row per participant (`aim2_master.rds`)
+that the downstream Table 1 / analysis files consume.
+
+Aim 2 is a melanoma + immune-checkpoint-inhibitor (ICI) cohort examining
+acute interstitial nephritis (AIN). Study arms:
+
+1. Metastatic melanoma receiving ICI
+2. Adjuvant stage II–III melanoma receiving ICI
+3. Control stage I–IIIA melanoma **not** receiving ICI
+
+> **REDCap structure.** This is a *longitudinal* project. The export has one
+> row per (`record_id` × `redcap_event_name`). Variables live in specific
+> events, so each block below pulls its variables from the correct event and
+> the blocks are joined back to one row per `record_id`:
+>
+> | Event (`redcap_event_name`) | Variables sourced here |
+> |---|---|
+> | `prebaseline_arm_1` | demographics, comorbidities, concomitant meds (`ppi`, `nephrotox_drugs___*`, `con_med`) |
+> | `baseline_arm_1` | `egfr`, baseline `visit_date` |
+> | `early_treatment_we_arm_1` | `ici_type` (defines baseline ICI regimen) |
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+library(tidyverse)
+library(readxl)
+library(lubridate)
+```
+
+# 1 Configuration — input files
+
+> **FILL IN once the Aim 2 data arrives.** The variable logic below is fully
+> specified by the SAP; only these paths are project-specific. Filenames follow
+> the same conventions as the parent Cystatin C / Sherley pipeline.
+
+```{r}
+#| label: config
+# Longitudinal REDCap export for the melanoma/ICI/AIN project
+redcap_path <- "Data/AIM2_REDCAP_DATA.csv"          # <-- set me
+
+# RPDR laboratory pull (pipe-delimited .txt), keyed by EMPI.
+# Needed only for baseline_hgb / baseline_albumin (closest lab to baseline visit).
+rpdr_lab_path <- "Data/AIM2_RPDR_Lab.txt"           # <-- set me
+
+# RPDR Group_Id labels for the two labs we need from RPDR
+HGB_GROUP <- "HGB"   # hemoglobin Group_Id in the RPDR pull
+ALB_GROUP <- "ALB"   # albumin   Group_Id in the RPDR pull
+```
+
+# 2 Load REDCap & split by event
+
+```{r}
+#| label: load-redcap
+raw <- read_csv(redcap_path, show_col_types = FALSE)
+
+# Defensive: REDCap exports the event column as redcap_event_name.
+stopifnot("redcap_event_name" %in% names(raw))
+
+prebaseline <- raw %>% filter(redcap_event_name == "prebaseline_arm_1")
+baseline    <- raw %>% filter(redcap_event_name == "baseline_arm_1")
+early_tx    <- raw %>% filter(redcap_event_name == "early_treatment_we_arm_1")
+```
+
+# 3 Demographics (Pre-baseline)
+
+Stored as numeric REDCap codes; labelled here as factors for Table 1.
+
+```{r}
+#| label: demographics
+demographics <- prebaseline %>%
+  transmute(
+    record_id,
+    sex = factor(sex, levels = c(1, 2, 3),
+                 labels = c("Male", "Female", "Other")),
+    race = factor(race, levels = c(1, 2, 3, 4),
+                  labels = c("White", "Black", "Asian", "Other")),
+    ethnicity = factor(ethnicity, levels = c(1, 2),
+                       labels = c("Hispanic", "Non-Hispanic")),
+    study_arm = factor(
+      study_arm, levels = c(1, 2, 3),
+      labels = c("Metastatic melanoma + ICI",
+                 "Adjuvant stage II–III melanoma + ICI",
+                 "Control stage I–IIIA melanoma, no ICI"))
+  )
+```
+
+# 4 Baseline comorbidities (Pre-baseline)
+
+REDCap checkbox fields export as `field___N` coded 0/1. Composite comorbidities
+combine the relevant boxes with logical OR; binary comorbidities map a single
+box. All coded 0 = Absent, 1 = Present.
+
+```{r}
+#| label: comorbidities
+# Helper: OR across one or more 0/1 checkbox columns → 0/1 (NA treated as 0)
+any_box <- function(df, cols) {
+  as.integer(rowSums(across(all_of(cols), ~ replace_na(.x == 1, FALSE))) > 0)
+}
+
+comorbidities <- prebaseline %>%
+  transmute(
+    record_id,
+    cirrhosis    = any_box(prebaseline, "comorb_gi___9"),
+    asvcd        = any_box(prebaseline, c("comorb_cardiac___1", "comorb_neuro___3")),
+    chf          = any_box(prebaseline, "comorb_cardiac___5"),
+    hypertension = any_box(prebaseline, "comorb_cardiac___4"),
+    copd         = any_box(prebaseline, "comorb_pulm___2"),
+    diabetes     = any_box(prebaseline, c("comorb_endocrine___3", "comorb_endocrine___4"))
+  )
+```
+
+## 4.1 Derived: Autoimmune history (`autoimmune_history`)
+
+`autoimmune_history` = 1 if **any** pre-existing autoimmune comorbidity box is
+checked, else 0 (SAP §"Derived variable: Autoimmune history").
+
+```{r}
+#| label: autoimmune-history
+autoimmune_boxes <- c(
+  "comorb_rheum___1", "comorb_rheum___3",
+  "comorb_pulm___3",
+  "comorb_cardiac___6",
+  "comorb_gi___1", "comorb_gi___3", "comorb_gi___4", "comorb_gi___5", "comorb_gi___8",
+  "comorb_derm___1", "comorb_derm___2", "comorb_derm___3", "comorb_derm___4",
+  "comorb_neuro___1", "comorb_neuro___2",
+  "comorb_endocrine___2", "comorb_endocrine___3",
+  "comorb_heme___1"
+)
+
+autoimmune <- prebaseline %>%
+  transmute(record_id,
+            autoimmune_history = any_box(prebaseline, autoimmune_boxes))
+```
+
+# 5 Baseline kidney function (Baseline event)
+
+`egfr` at `baseline_arm_1` (mL/min/1.73 m²). CKD stage by KDIGO GFR categories;
+plus the prespecified collapsed binary (<60 vs ≥60).
+
+```{r}
+#| label: ckd
+kidney <- baseline %>%
+  transmute(
+    record_id,
+    baseline_egfr = as.numeric(egfr),
+    baseline_ckd_stage = cut(
+      baseline_egfr,
+      breaks = c(-Inf, 15, 30, 45, 60, 90, Inf),
+      labels = c("G5", "G4", "G3b", "G3a", "G2", "G1"),
+      right  = FALSE),                              # [lower, upper)
+    # KDIGO boundaries are inclusive at the top of each band (e.g. G2 = 60–89,
+    # G1 ≥90). right = FALSE with these breaks reproduces that exactly:
+    #   <15 G5 · 15–29 G4 · 30–44 G3b · 45–59 G3a · 60–89 G2 · ≥90 G1
+    baseline_ckd_binary = if_else(baseline_egfr < 60, 1L, 0L)  # 1 = G3a–G5
+  ) %>%
+  mutate(baseline_ckd_stage = factor(
+    baseline_ckd_stage, levels = c("G1", "G2", "G3a", "G3b", "G4", "G5")))
+```
+
+# 6 Baseline ICI treatment (Early Treatment event)
+
+Baseline ICI regimen is defined by `ici_type` recorded at the **Early Treatment
+(Week 6–12)** event — the most accurate reflection of the established regimen
+(SAP §"Derived variable: Baseline ICI Treatment"). `ici_regimen_class` collapses
+the 11 types into 4 mechanism classes.
+
+```{r}
+#| label: ici
+ici <- early_tx %>%
+  transmute(
+    record_id,
+    baseline_ici_treatment = factor(
+      ici_type, levels = 1:11,
+      labels = c("Pembrolizumab", "Nivolumab", "Ipilimumab", "Relatlimab",
+                 "Avelumab", "Durvalumab", "Atezolizumab",
+                 "Nivolumab/Ipilimumab", "Nivolumab/Relatlimab",
+                 "Other", "Not receiving ICI")),
+    ici_regimen_class = factor(
+      case_when(
+        ici_type %in% c(1, 2, 5, 6, 7) ~ 1L,   # PD-(L)1 monotherapy
+        ici_type %in% c(3, 8)          ~ 2L,   # CTLA-4–containing
+        ici_type %in% c(4, 9)          ~ 3L,   # LAG-3–containing
+        ici_type %in% c(10, 11)        ~ 4L    # Other / No active ICI
+      ),
+      levels = 1:4,
+      labels = c("PD-(L)1 monotherapy", "CTLA-4–containing",
+                 "LAG-3–containing", "Other/No active ICI"))
+  )
+```
+
+# 7 Baseline concomitant medications (Pre-baseline)
+
+Six AIN-associated medication classes. Exposure = present (1) if the **structured
+REDCap field equals 1 OR** a generic/brand search term is found in the free-text
+`con_med` field (case-insensitive). Then `AIN_con_med_any` = 1 if any of the six
+classes is present.
+
+```{r}
+#| label: con-med-search-terms
+# Free-text search terms per class (SAP medication-class table). Each term is
+# matched case-insensitively as a word-boundary regex against con_med.
+search_terms <- list(
+  ppi = c("omeprazole","Prilosec","esomeprazole","Nexium","pantoprazole","Protonix",
+          "lansoprazole","Prevacid","dexlansoprazole","Dexilant","rabeprazole","Aciphex"),
+  antibiotic = c("amoxicillin","Augmentin","penicillin","ampicillin","dicloxacillin",
+          "cephalexin","Keflex","cefazolin","ceftriaxone","Rocephin","cefepime",
+          "cefpodoxime","cefdinir","ciprofloxacin","Cipro","levofloxacin","Levaquin",
+          "moxifloxacin","Avelox","azithromycin","Zithromax","clarithromycin","Biaxin",
+          "erythromycin","doxycycline","minocycline","tetracycline","clindamycin",
+          "Cleocin","metronidazole","Flagyl","nitrofurantoin","Macrobid","fosfomycin",
+          "Monurol","vancomycin","linezolid","Zyvox"),
+  tmp_smx = c("trimethoprim-sulfamethoxazole","TMP-SMX","TMP/SMX","sulfamethoxazole",
+          "cotrimoxazole","co-trimoxazole","Bactrim","Septra"),
+  nsaid = c("ibuprofen","Advil","Motrin","naproxen","Aleve","diclofenac","Voltaren",
+          "indomethacin","Indocin","meloxicam","Mobic","celecoxib","Celebrex",
+          "ketorolac","Toradol","nabumetone","Relafen","sulindac","etodolac",
+          "piroxicam","Feldene","oxaprozin","Daypro"),
+  allopurinol = c("allopurinol","Zyloprim","Aloprim"),
+  antiepileptic = c("carbamazepine","Tegretol","oxcarbazepine","Trileptal","phenytoin",
+          "Dilantin","fosphenytoin","Cerebyx","lamotrigine","Lamictal","phenobarbital")
+)
+
+# Structured REDCap field backing each class
+structured_field <- c(
+  ppi           = "ppi",
+  antibiotic    = "nephrotox_drugs___1",
+  tmp_smx       = "nephrotox_drugs___2",
+  nsaid         = "nephrotox_drugs___3",
+  allopurinol   = "nephrotox_drugs___4",
+  antiepileptic = "nephrotox_drugs___5"
+)
+```
+
+```{r}
+#| label: con-med
+# Build a case-insensitive alternation regex per class (terms regex-escaped).
+esc <- function(x) gsub("([][(){}.^$*+?\\\\|-])", "\\\\\\1", x)
+class_regex <- map_chr(search_terms, ~ paste0(esc(.x), collapse = "|"))
+
+con_text <- prebaseline$con_med %>% replace_na("")
+
+med_flags <- imap_dfc(structured_field, function(field, cls) {
+  structured <- if (field %in% names(prebaseline)) {
+    replace_na(prebaseline[[field]] == 1, FALSE)
+  } else FALSE
+  freetext <- str_detect(con_text, regex(class_regex[[cls]], ignore_case = TRUE))
+  tibble(!!cls := as.integer(structured | freetext))
+})
+
+medications <- bind_cols(record_id = prebaseline$record_id, med_flags) %>%
+  mutate(AIN_con_med_any = as.integer(
+    rowSums(across(all_of(names(structured_field)))) > 0))
+```
+
+# 8 Baseline RPDR labs (closest to baseline visit)
+
+`baseline_hgb` and `baseline_albumin` are the RPDR results with the **smallest
+absolute day-difference** from the baseline visit date. Ties prefer the value
+obtained **prior to** the visit. Anything > 30 days away is coded missing
+(SAP §"Baseline Hemoglobin / Albumin").
+
+> Requires an `EMPI` ↔ `record_id` crosswalk so RPDR (keyed by EMPI) can join to
+> REDCap (keyed by record_id). Set `EMPI` from the export if present.
+
+```{r}
+#| label: rpdr-labs
+#| eval: false
+# Closest-lab-to-date helper (adapted from the Sherley pre_lab() convention).
+closest_lab <- function(lab_df, index_df, group_id, varname, window = 30) {
+  lab_df %>%
+    filter(Group_Id == group_id, grepl("^\\d+\\.?\\d*$", Result)) %>%
+    mutate(Result = as.numeric(Result)) %>%
+    inner_join(index_df, by = "EMPI") %>%
+    mutate(diff = as.numeric(Seq_Date_Time - baseline_visit_date)) %>%
+    filter(abs(diff) <= window) %>%
+    # smallest |diff| first; ties → prior (diff <= 0) preferred
+    arrange(EMPI, abs(diff), diff > 0) %>%
+    distinct(EMPI, .keep_all = TRUE) %>%
+    transmute(EMPI, !!varname := Result)
+}
+
+lab <- read.table(rpdr_lab_path, sep = "|", fill = TRUE, quote = "",
+                  header = TRUE) %>%
+  select(EMPI, Seq_Date_Time, Result, Group_Id)
+lab$Seq_Date_Time <- as.Date(lab$Seq_Date_Time, "%m/%d/%Y")
+
+# baseline visit date + EMPI per record (visit_date lives in baseline_arm_1)
+index_df <- baseline %>%
+  transmute(record_id, EMPI, baseline_visit_date = as.Date(visit_date)) %>%
+  filter(!is.na(EMPI))
+
+hgb <- closest_lab(lab, index_df, HGB_GROUP, "baseline_hgb")
+alb <- closest_lab(lab, index_df, ALB_GROUP, "baseline_albumin")
+
+rpdr_labs <- index_df %>%
+  select(record_id, EMPI) %>%
+  left_join(hgb, by = "EMPI") %>%
+  left_join(alb, by = "EMPI") %>%
+  select(record_id, baseline_hgb, baseline_albumin)
+```
+
+# 9 Assemble one row per participant
+
+```{r}
+#| label: assemble
+aim2_master <- demographics %>%
+  left_join(comorbidities, by = "record_id") %>%
+  left_join(autoimmune,    by = "record_id") %>%
+  left_join(kidney,        by = "record_id") %>%
+  left_join(ici,           by = "record_id") %>%
+  left_join(medications,   by = "record_id")
+
+# Attach RPDR labs only if that chunk was run (data available)
+if (exists("rpdr_labs")) {
+  aim2_master <- aim2_master %>% left_join(rpdr_labs, by = "record_id")
+}
+
+saveRDS(aim2_master, "aim2_master.rds")
+glimpse(aim2_master)
+```
+
+# 10 Variable dictionary (created here)
+
+| Variable | Type | Source / definition |
+|---|---|---|
+| `sex`, `race`, `ethnicity`, `study_arm` | factor | Pre-baseline demographics (labelled) |
+| `cirrhosis` | 0/1 | `comorb_gi___9` |
+| `asvcd` | 0/1 | `comorb_cardiac___1` OR `comorb_neuro___3` |
+| `chf` | 0/1 | `comorb_cardiac___5` |
+| `hypertension` | 0/1 | `comorb_cardiac___4` |
+| `copd` | 0/1 | `comorb_pulm___2` |
+| `diabetes` | 0/1 | `comorb_endocrine___3` OR `comorb_endocrine___4` |
+| `autoimmune_history` | 0/1 | any of 18 autoimmune comorbidity boxes |
+| `baseline_egfr` | continuous | `egfr` @ baseline |
+| `baseline_ckd_stage` | factor G1–G5 | KDIGO categories of `baseline_egfr` |
+| `baseline_ckd_binary` | 0/1 | 1 if eGFR <60 (G3a–G5) |
+| `baseline_ici_treatment` | factor (11) | `ici_type` @ early-treatment |
+| `ici_regimen_class` | factor (4) | mechanism class of `ici_type` |
+| `ppi`,`antibiotic`,`tmp_smx`,`nsaid`,`allopurinol`,`antiepileptic` | 0/1 | structured field OR `con_med` free-text |
+| `AIN_con_med_any` | 0/1 | any of the six medication classes |
+| `baseline_hgb`, `baseline_albumin` | continuous | RPDR lab closest to baseline visit (±30 d) |

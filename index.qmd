@@ -1,0 +1,42 @@
+---
+title: "Aim 2 — Melanoma · ICI · Acute Interstitial Nephritis"
+author: "Tianqi Ouyang"
+date: "2026-06-30"
+---
+
+# Project Overview
+
+Aim 2 examines **acute interstitial nephritis (AIN)** in melanoma patients
+treated with **immune checkpoint inhibitors (ICI)**. It is a separate study
+built on the data-management conventions of the
+[Sherley project](https://github.com/Tianqi-Ouyang/Sherley-project), with its
+own longitudinal REDCap project and Statistical Analysis Plan
+(`Tianqi_SAP.docx`).
+
+# Study Arms
+
+| Arm | Definition |
+|---|---|
+| 1 | Metastatic melanoma receiving ICI |
+| 2 | Adjuvant stage II–III melanoma receiving ICI |
+| 3 | Control: stage I–IIIA melanoma **not** receiving ICI |
+
+# Data Sources
+
+| Source | Role |
+|---|---|
+| Longitudinal REDCap export | Demographics, comorbidities, ICI regimen, concomitant medications, baseline eGFR |
+| RPDR laboratory pull | Baseline hemoglobin & albumin (closest result to baseline visit) |
+
+REDCap events: `prebaseline_arm_1` (demographics, comorbidities, meds),
+`baseline_arm_1` (eGFR, visit date), `early_treatment_we_arm_1` (ICI regimen).
+
+# Key Derived Variables
+
+- **`autoimmune_history`** — any of 18 pre-existing autoimmune comorbidity boxes
+- **`baseline_ckd_stage` / `baseline_ckd_binary`** — KDIGO categories of baseline eGFR (binary <60)
+- **`baseline_ici_treatment` / `ici_regimen_class`** — ICI regimen and its 4-level mechanism class
+- **`AIN_con_med_any`** — exposure to any of 6 AIN-associated medication classes (structured field **or** `con_med` free-text)
+- **`baseline_hgb` / `baseline_albumin`** — RPDR labs closest to the baseline visit (±30 days)
+
+See **Variable Creation** for the full SAP-specified derivation logic.
