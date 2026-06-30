@@ -20,6 +20,30 @@ The cohort is three study arms:
 The current scope is **variable creation** — translating the SAP into reproducible
 derived variables. Downstream Table 1 / analysis files are not built yet.
 
+> **This project is fully independent of any other project** (in particular it is
+> unrelated to the "Sherley" cystatin-C project, even though both live under
+> `~/Desktop/Meg`). Do not pull in cohorts, variables, or files from other
+> projects. This folder is its own git repo.
+
+## Status & Provenance (last updated 2026-06-30)
+
+Hand-off notes for a fresh session:
+
+- **What exists:** a Quarto website (`index.qmd` + `qmd/aim2_variables.qmd`) and
+  this guidance file. `qmd/aim2_variables.qmd` implements every variable defined
+  in `Tianqi_SAP.docx` and writes `aim2_master.rds`. The site renders with
+  `eval: false`, so it builds for review before any PHI data is present.
+- **Published:** GitHub repo **https://github.com/Tianqi-Ouyang/aim-2-**
+  (branch `main`); live site via GitHub Pages at
+  **https://tianqi-ouyang.github.io/aim-2-/** (served from `/docs`, `.nojekyll`
+  kept as a Quarto resource).
+- **What's NOT done yet:** no real data is wired in — set `redcap_path` /
+  `rpdr_lab_path` in the `#| label: config` chunk when the export arrives; the
+  RPDR-labs chunk is `eval: false` pending an `EMPI`↔`record_id` crosswalk; and
+  no Table 1 / outcome / competing-risks analysis has been built.
+- **Folder note:** this project was moved out of `~/Desktop/Meg/Sherley/` to
+  `~/Desktop/Meg/` on 2026-06-30 so it no longer nests inside an unrelated repo.
+
 ## Running the Analysis
 
 Quarto project. Render the website from the project root:
