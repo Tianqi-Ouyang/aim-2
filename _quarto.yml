@@ -1,6 +1,10 @@
 project:
   type: website
   output-dir: docs
+  # .nojekyll is copied into docs/ on every render so GitHub Pages serves
+  # Quarto's asset folders verbatim (no Jekyll processing).
+  resources:
+    - .nojekyll
   render:
     - index.qmd
     - qmd/aim2_variables.qmd
